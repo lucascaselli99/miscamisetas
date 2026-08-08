@@ -1,0 +1,3 @@
+import type { CatalogCategory, CatalogStatus, ShirtType } from "./database.types";
+export interface CatalogShirt { id:string; teamName:string; country:string|null; season:string; shirtType:ShirtType|null; brand:string|null; category:CatalogCategory; competition:string|null; description:string|null; imageUrl:string|null; status:CatalogStatus; owners:number; createdAt:string; }
+export interface CatalogFormValues { teamName:string; country:string|null; season:string; shirtType:ShirtType|null; brand:string|null; category:CatalogCategory; competition:string|null; description:string|null; imageUrl:string|null; }
