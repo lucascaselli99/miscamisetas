@@ -271,3 +271,4 @@ El panel `/admin/catalogo` permite elegir una foto desde el dispositivo. La imag
 Antes de usar la subida directa, ejecutar una vez en Supabase SQL Editor:
 
 `supabase/catalog_storage_migration.sql`
+Actualización V2 catálogo
