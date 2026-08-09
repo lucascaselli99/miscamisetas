@@ -5,13 +5,14 @@ import { getSignedUrls, deleteShirtImage } from "./storage";
 
 type Client = TypedSupabaseClient;
 type ShirtRow = Database["public"]["Tables"]["shirts"]["Row"];
+
 // Alias nombrados para los tipos de insert/update (ver nota en profile.ts):
 // resuelven el "indexed access type" una sola vez en vez de repetirlo inline
 // en cada firma que le pasa un payload a PostgREST.
 type ShirtInsert = Database["public"]["Tables"]["shirts"]["Insert"];
 type ShirtUpdate = Database["public"]["Tables"]["shirts"]["Update"];
 
-function mapShirt(row: ShirtRow, signedUrl: string | null): Shirt {
+function mapShirt(row: ShirtRow, resolvedImageUrl: string | null): Shirt {
   return {
     id: row.id,
     userId: row.user_id,
@@ -30,18 +31,72 @@ function mapShirt(row: ShirtRow, signedUrl: string | null): Shirt {
     purchasePlace: row.purchase_place,
     notes: row.notes,
     imagePath: row.image_url,
-    imageUrl: signedUrl,
+    imageUrl: resolvedImageUrl,
     isFavorite: row.is_favorite,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-/** Resuelve signed URLs para un conjunto de filas y arma los objetos Shirt. */
-async function mapShirtsWithImages(supabase: Client, rows: ShirtRow[]): Promise<Shirt[]> {
-  const paths = rows.map((r) => r.image_url).filter((p): p is string => Boolean(p));
-  const urlMap = await getSignedUrls(supabase, paths);
-  return rows.map((row) => mapShirt(row, row.image_url ? urlMap.get(row.image_url) ?? null : null));
+/**
+ * Resuelve la imagen visible de cada camiseta con esta prioridad:
+ * 1) Foto personal de la colección (bucket privado -> signed URL).
+ * 2) Foto global de la camiseta del catálogo.
+ * 3) Sin imagen.
+ *
+ * Así, cuando una camiseta se agrega desde el catálogo sin subir una foto
+ * personal, en la colección se muestra automáticamente la imagen del catálogo.
+ */
+async function mapShirtsWithImages(
+  supabase: Client,
+  rows: ShirtRow[]
+): Promise<Shirt[]> {
+  const personalPaths = rows
+    .map((row) => row.image_url)
+    .filter((path): path is string => Boolean(path));
+
+  const signedUrlMap = await getSignedUrls(supabase, personalPaths);
+
+  const catalogIds = Array.from(
+    new Set(
+      rows
+        .filter((row) => !row.image_url && row.catalog_shirt_id)
+        .map((row) => row.catalog_shirt_id as string)
+    )
+  );
+
+  const catalogImageMap = new Map<string, string>();
+
+  if (catalogIds.length > 0) {
+    const { data, error } = await supabase
+      .from("catalog_shirts")
+      .select("id, image_url")
+      .in("id", catalogIds);
+
+    if (error) {
+      throw new Error(
+        `No se pudieron cargar las imágenes del catálogo: ${error.message}`
+      );
+    }
+
+    (data ?? []).forEach((catalogShirt) => {
+      if (catalogShirt.image_url) {
+        catalogImageMap.set(catalogShirt.id, catalogShirt.image_url);
+      }
+    });
+  }
+
+  return rows.map((row) => {
+    let imageUrl: string | null = null;
+
+    if (row.image_url) {
+      imageUrl = signedUrlMap.get(row.image_url) ?? null;
+    } else if (row.catalog_shirt_id) {
+      imageUrl = catalogImageMap.get(row.catalog_shirt_id) ?? null;
+    }
+
+    return mapShirt(row, imageUrl);
+  });
 }
 
 interface ListShirtsOptions {
@@ -60,6 +115,7 @@ export async function listShirts(supabase: Client, userId: string): Promise<Shir
     .order("created_at", { ascending: false });
 
   if (error) throw new Error(`No se pudo cargar la colección: ${error.message}`);
+
   return mapShirtsWithImages(supabase, data ?? []);
 }
 
@@ -87,6 +143,7 @@ export function filterAndSortShirts(
   if (filters?.onlyFavorites) result = result.filter((s) => s.isFavorite);
 
   const sorted = [...result];
+
   switch (sort) {
     case "oldest":
       sorted.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -113,13 +170,20 @@ export async function countShirts(supabase: Client, userId: string): Promise<num
     .eq("user_id", userId);
 
   if (error) throw new Error(`No se pudo contar las camisetas: ${error.message}`);
+
   return count ?? 0;
 }
 
 export async function getShirt(supabase: Client, id: string): Promise<Shirt | null> {
-  const { data, error } = await supabase.from("shirts").select("*").eq("id", id).maybeSingle();
+  const { data, error } = await supabase
+    .from("shirts")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+
   if (error) throw new Error(`No se pudo cargar la camiseta: ${error.message}`);
   if (!data) return null;
+
   const [shirt] = await mapShirtsWithImages(supabase, [data]);
   return shirt;
 }
@@ -167,6 +231,7 @@ export async function createShirt(
     .single();
 
   if (error) throw new Error(`No se pudo guardar la camiseta: ${error.message}`);
+
   const [shirt] = await mapShirtsWithImages(supabase, [data]);
   return shirt;
 }
@@ -188,6 +253,7 @@ export async function updateShirt(
   const updatePayload: ShirtUpdate = {
     ...toSharedFields(values),
   };
+
   if (options.imagePath !== undefined) {
     updatePayload.image_url = options.imagePath;
   }
@@ -209,14 +275,29 @@ export async function updateShirt(
   return shirt;
 }
 
-export async function deleteShirt(supabase: Client, id: string, imagePath: string | null): Promise<void> {
+export async function deleteShirt(
+  supabase: Client,
+  id: string,
+  imagePath: string | null
+): Promise<void> {
   const { error } = await supabase.from("shirts").delete().eq("id", id);
+
   if (error) throw new Error(`No se pudo eliminar la camiseta: ${error.message}`);
+
   await deleteShirtImage(supabase, imagePath);
 }
 
-export async function toggleFavorite(supabase: Client, id: string, isFavorite: boolean): Promise<void> {
+export async function toggleFavorite(
+  supabase: Client,
+  id: string,
+  isFavorite: boolean
+): Promise<void> {
   const favoritePayload: ShirtUpdate = { is_favorite: isFavorite };
-  const { error } = await supabase.from("shirts").update(favoritePayload).eq("id", id);
+
+  const { error } = await supabase
+    .from("shirts")
+    .update(favoritePayload)
+    .eq("id", id);
+
   if (error) throw new Error(`No se pudo actualizar favorita: ${error.message}`);
 }
