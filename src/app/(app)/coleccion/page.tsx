@@ -84,7 +84,20 @@ export default function ColeccionPage() {
 
   return (
     <div>
-      <PageHeader title="Colección" subtitle={loading ? undefined : `${shirts.length} camisetas`} />
+      <PageHeader
+        title="Colección"
+        subtitle={loading ? undefined : `${shirts.length} camisetas`}
+        action={
+          !loading ? (
+            <Link href="/catalogo">
+              <Button size="sm" className="gap-1.5">
+                <Plus className="h-4 w-4" />
+                Agregar
+              </Button>
+            </Link>
+          ) : undefined
+        }
+      />
 
       {!loading && shirts.length > 0 && (
         <ShirtFilters
@@ -106,7 +119,7 @@ export default function ColeccionPage() {
           title="Tu colección está vacía."
           description="Agregá tu primera camiseta para empezar a armar tu colección."
           action={
-            <Link href="/agregar">
+            <Link href="/catalogo">
               <Button className="gap-1.5">
                 <Plus className="h-4 w-4" />
                 Agregar camiseta
