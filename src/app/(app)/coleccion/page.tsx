@@ -35,7 +35,6 @@ const EMPTY_FILTERS: ShirtFiltersType = {
 export default function ColeccionPage() {
   const { user } = useAuth();
   const { showError } = useToast();
-
   const [shirts, setShirts] = useState<Shirt[]>([]);
   const [loading, setLoading] = useState(true);
   const [filters, setFilters] = useState<ShirtFiltersType>(EMPTY_FILTERS);
@@ -43,25 +42,18 @@ export default function ColeccionPage() {
 
   useEffect(() => {
     let active = true;
-
     async function load() {
       try {
         const supabase = createClient();
         const data = await listShirts(supabase, user.id);
         if (active) setShirts(data);
       } catch (error) {
-        showError(
-          error instanceof Error
-            ? error.message
-            : "No se pudo cargar tu colección."
-        );
+        showError(error instanceof Error ? error.message : "No se pudo cargar tu colección.");
       } finally {
         if (active) setLoading(false);
       }
     }
-
     load();
-
     return () => {
       active = false;
     };
@@ -72,13 +64,11 @@ export default function ColeccionPage() {
     const teamSet = new Set<string>();
     const brandSet = new Set<string>();
     const seasonSet = new Set<string>();
-
-    shirts.forEach((shirt) => {
-      teamSet.add(shirt.teamName);
-      if (shirt.brand) brandSet.add(shirt.brand);
-      seasonSet.add(shirt.season);
+    shirts.forEach((s) => {
+      teamSet.add(s.teamName);
+      if (s.brand) brandSet.add(s.brand);
+      seasonSet.add(s.season);
     });
-
     return {
       teams: Array.from(teamSet).sort(),
       brands: Array.from(brandSet).sort(),
@@ -93,28 +83,17 @@ export default function ColeccionPage() {
 
   async function handleToggleFavorite(shirt: Shirt) {
     const next = !shirt.isFavorite;
-
     setShirts((prev) =>
-      prev.map((item) =>
-        item.id === shirt.id ? { ...item, isFavorite: next } : item
-      )
+      prev.map((s) => (s.id === shirt.id ? { ...s, isFavorite: next } : s))
     );
-
     try {
       const supabase = createClient();
       await toggleFavorite(supabase, shirt.id, next);
     } catch (error) {
       setShirts((prev) =>
-        prev.map((item) =>
-          item.id === shirt.id ? { ...item, isFavorite: !next } : item
-        )
+        prev.map((s) => (s.id === shirt.id ? { ...s, isFavorite: !next } : s))
       );
-
-      showError(
-        error instanceof Error
-          ? error.message
-          : "No se pudo actualizar favorita."
-      );
+      showError(error instanceof Error ? error.message : "No se pudo actualizar favorita.");
     }
   }
 
@@ -125,7 +104,7 @@ export default function ColeccionPage() {
         subtitle={loading ? undefined : `${shirts.length} camisetas`}
         action={
           !loading ? (
-            <Link href="/catalogo">
+            <Link href="/agregar">
               <Button className="gap-1.5">
                 <Plus className="h-4 w-4" />
                 Agregar camiseta
@@ -155,7 +134,7 @@ export default function ColeccionPage() {
           title="Tu colección está vacía."
           description="Agregá tu primera camiseta para empezar a armar tu colección."
           action={
-            <Link href="/catalogo">
+            <Link href="/agregar">
               <Button className="gap-1.5">
                 <Plus className="h-4 w-4" />
                 Agregar camiseta
@@ -175,11 +154,7 @@ export default function ColeccionPage() {
       {!loading && filtered.length > 0 && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           {filtered.map((shirt) => (
-            <ShirtCard
-              key={shirt.id}
-              shirt={shirt}
-              onToggleFavorite={handleToggleFavorite}
-            />
+            <ShirtCard key={shirt.id} shirt={shirt} onToggleFavorite={handleToggleFavorite} />
           ))}
         </div>
       )}
