@@ -7,11 +7,13 @@ import { createShirt } from "./shirts";
 
 type Client = TypedSupabaseClient;
 type WishlistRow = Database["public"]["Tables"]["wishlist"]["Row"];
-// Alias nombrados para los tipos de insert/update (ver nota en profile.ts).
 type WishlistInsert = Database["public"]["Tables"]["wishlist"]["Insert"];
 type WishlistUpdate = Database["public"]["Tables"]["wishlist"]["Update"];
 
-function mapWishlistItem(row: WishlistRow, signedUrl: string | null): WishlistItem {
+function mapWishlistItem(
+  row: WishlistRow,
+  resolvedImageUrl: string | null
+): WishlistItem {
   return {
     id: row.id,
     userId: row.user_id,
@@ -24,35 +26,106 @@ function mapWishlistItem(row: WishlistRow, signedUrl: string | null): WishlistIt
     priority: row.priority,
     notes: row.notes,
     imagePath: row.image_url,
-    imageUrl: signedUrl,
+    imageUrl: resolvedImageUrl,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
 }
 
-async function mapWishlistWithImages(supabase: Client, rows: WishlistRow[]): Promise<WishlistItem[]> {
-  const paths = rows.map((r) => r.image_url).filter((p): p is string => Boolean(p));
-  const urlMap = await getSignedUrls(supabase, paths);
-  return rows.map((row) =>
-    mapWishlistItem(row, row.image_url ? urlMap.get(row.image_url) ?? null : null)
+/**
+ * Resuelve la imagen de cada item con esta prioridad:
+ * 1) Foto propia de la wishlist (bucket privado -> signed URL).
+ * 2) Foto global de la camiseta del catálogo.
+ * 3) Sin imagen.
+ *
+ * De esta forma los items agregados desde el catálogo muestran
+ * automáticamente la misma imagen del catálogo sin duplicarla en Storage.
+ */
+async function mapWishlistWithImages(
+  supabase: Client,
+  rows: WishlistRow[]
+): Promise<WishlistItem[]> {
+  const personalPaths = rows
+    .map((row) => row.image_url)
+    .filter((path): path is string => Boolean(path));
+
+  const signedUrlMap = await getSignedUrls(supabase, personalPaths);
+
+  const catalogIds = Array.from(
+    new Set(
+      rows
+        .filter((row) => !row.image_url && row.catalog_shirt_id)
+        .map((row) => row.catalog_shirt_id as string)
+    )
   );
+
+  const catalogImageMap = new Map<string, string>();
+
+  if (catalogIds.length > 0) {
+    const { data, error } = await supabase
+      .from("catalog_shirts")
+      .select("id, image_url")
+      .in("id", catalogIds);
+
+    if (error) {
+      throw new Error(
+        `No se pudieron cargar las imágenes del catálogo: ${error.message}`
+      );
+    }
+
+    (data ?? []).forEach((catalogShirt) => {
+      if (catalogShirt.image_url) {
+        catalogImageMap.set(catalogShirt.id, catalogShirt.image_url);
+      }
+    });
+  }
+
+  return rows.map((row) => {
+    let imageUrl: string | null = null;
+
+    if (row.image_url) {
+      imageUrl = signedUrlMap.get(row.image_url) ?? null;
+    } else if (row.catalog_shirt_id) {
+      imageUrl = catalogImageMap.get(row.catalog_shirt_id) ?? null;
+    }
+
+    return mapWishlistItem(row, imageUrl);
+  });
 }
 
-export async function listWishlist(supabase: Client, userId: string): Promise<WishlistItem[]> {
+export async function listWishlist(
+  supabase: Client,
+  userId: string
+): Promise<WishlistItem[]> {
   const { data, error } = await supabase
     .from("wishlist")
     .select("*")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
 
-  if (error) throw new Error(`No se pudo cargar la wishlist: ${error.message}`);
+  if (error) {
+    throw new Error(`No se pudo cargar la wishlist: ${error.message}`);
+  }
+
   return mapWishlistWithImages(supabase, data ?? []);
 }
 
-export async function getWishlistItem(supabase: Client, id: string): Promise<WishlistItem | null> {
-  const { data, error } = await supabase.from("wishlist").select("*").eq("id", id).maybeSingle();
-  if (error) throw new Error(`No se pudo cargar el ítem: ${error.message}`);
+export async function getWishlistItem(
+  supabase: Client,
+  id: string
+): Promise<WishlistItem | null> {
+  const { data, error } = await supabase
+    .from("wishlist")
+    .select("*")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`No se pudo cargar el ítem: ${error.message}`);
+  }
+
   if (!data) return null;
+
   const [item] = await mapWishlistWithImages(supabase, [data]);
   return item;
 }
@@ -87,7 +160,10 @@ export async function createWishlistItem(
     .select("*")
     .single();
 
-  if (error) throw new Error(`No se pudo guardar el ítem: ${error.message}`);
+  if (error) {
+    throw new Error(`No se pudo guardar el ítem: ${error.message}`);
+  }
+
   const [item] = await mapWishlistWithImages(supabase, [data]);
   return item;
 }
@@ -106,6 +182,7 @@ export async function updateWishlistItem(
   const updatePayload: WishlistUpdate = {
     ...toSharedFields(values),
   };
+
   if (options.imagePath !== undefined) {
     updatePayload.image_url = options.imagePath;
   }
@@ -117,7 +194,9 @@ export async function updateWishlistItem(
     .select("*")
     .single();
 
-  if (error) throw new Error(`No se pudo actualizar el ítem: ${error.message}`);
+  if (error) {
+    throw new Error(`No se pudo actualizar el ítem: ${error.message}`);
+  }
 
   if (options.imagePath !== undefined && options.previousImagePath) {
     await deleteShirtImage(supabase, options.previousImagePath);
@@ -133,7 +212,11 @@ export async function deleteWishlistItem(
   imagePath: string | null
 ): Promise<void> {
   const { error } = await supabase.from("wishlist").delete().eq("id", id);
-  if (error) throw new Error(`No se pudo eliminar el ítem: ${error.message}`);
+
+  if (error) {
+    throw new Error(`No se pudo eliminar el ítem: ${error.message}`);
+  }
+
   await deleteShirtImage(supabase, imagePath);
 }
 
@@ -143,7 +226,10 @@ export async function deleteWishlistItem(
  * wishlist. Se prioriza no perder datos: si la creacion falla, el item
  * sigue en la wishlist.
  */
-export async function moveToCollection(supabase: Client, item: WishlistItem) {
+export async function moveToCollection(
+  supabase: Client,
+  item: WishlistItem
+) {
   const shirtValues: ShirtFormValues = {
     teamName: item.teamName,
     season: item.season || "Sin especificar",
@@ -162,14 +248,20 @@ export async function moveToCollection(supabase: Client, item: WishlistItem) {
     isFavorite: false,
   };
 
-  // Reutilizamos el mismo path de imagen (no hace falta re-subir el archivo):
-  // la camiseta nueva apunta al mismo objeto en el bucket.
-  const shirt = await createShirt(supabase, item.userId, shirtValues, item.imagePath, item.catalogShirtId);
+  const shirt = await createShirt(
+    supabase,
+    item.userId,
+    shirtValues,
+    item.imagePath,
+    item.catalogShirtId
+  );
 
-  const { error } = await supabase.from("wishlist").delete().eq("id", item.id);
+  const { error } = await supabase
+    .from("wishlist")
+    .delete()
+    .eq("id", item.id);
+
   if (error) {
-    // La camiseta ya se creo; avisamos pero no revertimos para no perder
-    // la carga. El usuario puede borrar el item de wishlist manualmente.
     throw new Error(
       "La camiseta se agregó a tu colección, pero no se pudo quitar de la wishlist. Podés borrarla manualmente."
     );
