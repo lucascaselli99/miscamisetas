@@ -1,7 +1,22 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { Camera, CheckCircle2, ImagePlus, RefreshCw, X } from "lucide-react";
+import {
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type DragEvent,
+  type MouseEvent,
+} from "react";
+import {
+  Camera,
+  CheckCircle2,
+  ImagePlus,
+  RefreshCw,
+  UploadCloud,
+  X,
+} from "lucide-react";
 import { cn } from "@/utils/cn";
 
 interface PhotoPickerProps {
@@ -11,10 +26,20 @@ interface PhotoPickerProps {
   className?: string;
 }
 
-export function PhotoPicker({ existingImageUrl, onFileSelected, className }: PhotoPickerProps) {
+export function PhotoPicker({
+  existingImageUrl,
+  onFileSelected,
+  className,
+}: PhotoPickerProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(existingImageUrl ?? null);
+  const inputId = useId();
+
+  const [previewUrl, setPreviewUrl] = useState<string | null>(
+    existingImageUrl ?? null
+  );
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
   const objectUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -23,27 +48,77 @@ export function PhotoPicker({ existingImageUrl, onFileSelected, className }: Pho
     };
   }, []);
 
-  function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  function selectFile(file: File) {
+    if (!file.type.startsWith("image/")) return;
 
-    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current);
+    if (objectUrlRef.current) {
+      URL.revokeObjectURL(objectUrlRef.current);
+    }
+
     const objectUrl = URL.createObjectURL(file);
     objectUrlRef.current = objectUrl;
+
     setPreviewUrl(objectUrl);
     setSelectedFileName(file.name);
+    setIsDragging(false);
     onFileSelected(file);
   }
 
-  function handleRemove(e?: React.MouseEvent) {
-    e?.stopPropagation();
+  function handleChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    selectFile(file);
+  }
+
+  function handleDragOver(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.dataTransfer.types.includes("Files")) {
+      event.dataTransfer.dropEffect = "copy";
+      setIsDragging(true);
+    }
+  }
+
+  function handleDragLeave(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    // Evita apagar el estado cuando el cursor pasa por encima
+    // de un hijo del mismo dropzone.
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+
+    setIsDragging(false);
+  }
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragging(false);
+
+    const file = Array.from(event.dataTransfer.files).find((item) =>
+      item.type.startsWith("image/")
+    );
+
+    if (!file) return;
+
+    selectFile(file);
+  }
+
+  function handleRemove(event?: MouseEvent) {
+    event?.stopPropagation();
+
     if (objectUrlRef.current) {
       URL.revokeObjectURL(objectUrlRef.current);
       objectUrlRef.current = null;
     }
+
     setPreviewUrl(null);
     setSelectedFileName(null);
+    setIsDragging(false);
     onFileSelected(null);
+
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -59,20 +134,46 @@ export function PhotoPicker({ existingImageUrl, onFileSelected, className }: Pho
         accept="image/*"
         onChange={handleChange}
         className="sr-only"
-        id="shirt-photo-input"
+        id={inputId}
       />
 
       {!previewUrl ? (
         <label
-          htmlFor="shirt-photo-input"
-          className="flex aspect-[4/5] w-full cursor-pointer flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border-2 border-dashed border-ink-900/15 bg-white text-ink-500 transition hover:border-accent-500/50"
+          htmlFor={inputId}
+          onDragEnter={handleDragOver}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={cn(
+            "flex aspect-[4/5] w-full cursor-pointer flex-col items-center justify-center gap-2 overflow-hidden rounded-2xl border-2 border-dashed bg-white px-5 text-center transition",
+            isDragging
+              ? "scale-[1.01] border-accent-500 bg-accent-50 text-accent-700 shadow-sm"
+              : "border-ink-900/15 text-ink-500 hover:border-accent-500/50 hover:bg-accent-50/40"
+          )}
         >
-          <Camera className="h-8 w-8" />
-          <span className="text-sm font-medium">Agregar foto</span>
-          <span className="flex items-center gap-1 text-xs text-ink-300">
-            <ImagePlus className="h-3.5 w-3.5" />
-            Cámara o galería
-          </span>
+          {isDragging ? (
+            <>
+              <UploadCloud className="h-9 w-9" />
+              <span className="text-sm font-semibold">Soltá la foto acá</span>
+              <span className="text-xs text-accent-600">
+                La imagen quedará lista para subir
+              </span>
+            </>
+          ) : (
+            <>
+              <Camera className="h-8 w-8" />
+              <span className="text-sm font-semibold text-ink-700">
+                Arrastrá una foto acá
+              </span>
+              <span className="text-xs text-ink-300">
+                o tocá para elegir una imagen
+              </span>
+              <span className="mt-1 flex items-center gap-1 text-xs text-ink-300">
+                <ImagePlus className="h-3.5 w-3.5" />
+                Cámara, galería o archivo
+              </span>
+            </>
+          )}
         </label>
       ) : (
         <div className="overflow-hidden rounded-2xl border border-accent-500/25 bg-white shadow-sm">
@@ -83,6 +184,7 @@ export function PhotoPicker({ existingImageUrl, onFileSelected, className }: Pho
               alt="Vista previa de la camiseta"
               className="h-full w-full object-contain"
             />
+
             <button
               type="button"
               onClick={handleRemove}
@@ -99,10 +201,12 @@ export function PhotoPicker({ existingImageUrl, onFileSelected, className }: Pho
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
                 Foto lista
               </div>
+
               <p className="mt-0.5 truncate text-xs text-ink-300">
                 {selectedFileName ?? "Imagen actual"}
               </p>
             </div>
+
             <button
               type="button"
               onClick={chooseAnother}
